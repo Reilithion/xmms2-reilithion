@@ -50,6 +50,7 @@ typedef struct xmms_gme_data_St {
 
 static gboolean xmms_gme_plugin_setup (xmms_xform_plugin_t *xform_plugin);
 static gint xmms_gme_read (xmms_xform_t *xform, xmms_sample_t *buf, gint len, xmms_error_t *err);
+static gboolean xmms_gme_browse (xmms_xform_t *xform, const gchar *url, xmms_error_t *err);
 static gboolean xmms_gme_init (xmms_xform_t *decoder);
 static void xmms_gme_destroy (xmms_xform_t *decoder);
 static gint64 xmms_gme_seek (xmms_xform_t *xform, gint64 samples, xmms_xform_seek_mode_t whence, xmms_error_t *err);
@@ -73,6 +74,7 @@ xmms_gme_plugin_setup (xmms_xform_plugin_t *xform_plugin)
 	methods.destroy = xmms_gme_destroy;
 	methods.read = xmms_gme_read;
 	methods.seek = xmms_gme_seek;
+	methods.browse = xmms_gme_browse;
 
 	xmms_xform_plugin_methods_set (xform_plugin, &methods);
 
@@ -205,17 +207,6 @@ xmms_gme_init (xmms_xform_t *xform)
 		samplerate = GME_DEFAULT_SAMPLE_RATE;
 	data->samplerate = samplerate;
 
-	xmms_xform_outdata_type_add (xform,
-	                             XMMS_STREAM_TYPE_MIMETYPE,
-	                             "audio/pcm", /* PCM samples */
-	                             XMMS_STREAM_TYPE_FMT_FORMAT,
-	                             XMMS_SAMPLE_FORMAT_S16, /* 16-bit signed */
-	                             XMMS_STREAM_TYPE_FMT_CHANNELS,
-	                             2, /* stereo */
-	                             XMMS_STREAM_TYPE_FMT_SAMPLERATE,
-	                             samplerate,
-	                             XMMS_STREAM_TYPE_END);
-
 	file_contents = g_string_new ("");
 
 	for (;;) {
@@ -243,6 +234,7 @@ xmms_gme_init (xmms_xform_t *xform)
 		return FALSE;
 	}
 
+	/* If we were given a subtune to play */
 	if (xmms_xform_metadata_get_str (xform, "subtune", &subtune_str)) {
 		subtune = strtol (subtune_str, NULL, 10);
 		XMMS_DBG ("Setting subtune to %d", subtune);
@@ -252,7 +244,27 @@ xmms_gme_init (xmms_xform_t *xform)
 		}
 	} else {
 		xmms_xform_metadata_set_int (xform, XMMS_MEDIALIB_ENTRY_PROPERTY_SUBTUNES, gme_track_count (data->emu));
+
+		/* If we were given no subtune to play, but the file has multiple, browse it */
+		if (gme_track_count (data->emu) > 1) {
+			xmms_xform_outdata_type_add (xform,
+			                             XMMS_STREAM_TYPE_MIMETYPE,
+			                             "application/x-xmms2-playlist-entries",
+			                             XMMS_STREAM_TYPE_END);
+			return TRUE;
+		}
 	}
+
+	xmms_xform_outdata_type_add (xform,
+	                             XMMS_STREAM_TYPE_MIMETYPE,
+	                             "audio/pcm", /* PCM samples */
+	                             XMMS_STREAM_TYPE_FMT_FORMAT,
+	                             XMMS_SAMPLE_FORMAT_S16, /* 16-bit signed */
+	                             XMMS_STREAM_TYPE_FMT_CHANNELS,
+	                             2, /* stereo */
+	                             XMMS_STREAM_TYPE_FMT_SAMPLERATE,
+	                             samplerate,
+	                             XMMS_STREAM_TYPE_END);
 
 	/*
 	 *  Get metadata here
@@ -398,6 +410,38 @@ xmms_gme_seek (xmms_xform_t *xform, gint64 samples,
 	gme_seek (data->emu, target_time);
 
 	return (gme_tell (data->emu) / 1000) * samplerate;
+}
+
+static gboolean
+xmms_gme_browse (xmms_xform_t *xform,
+                 const gchar *url,
+                 xmms_error_t *error)
+{
+	int tracks;
+	const gchar *xformURL;
+	gchar *argsArray[1];
+	xmms_gme_data_t *data;
+	int i;
+
+	g_return_val_if_fail (xform, FALSE);
+
+	data = (xmms_gme_data_t *) xmms_xform_private_data_get (xform);
+	g_return_val_if_fail (data, FALSE);
+
+	tracks = gme_track_count (data->emu);
+	xformURL = xmms_xform_get_url (xform);
+
+	for (i = 0; i < tracks; i++) {
+		XMMS_DBG ("Adding subtune %d", i);
+		argsArray[0] = g_strdup_printf ("subtune=%d", i);
+		xmms_xform_browse_add_symlink_args (xform,
+		                                    NULL,
+		                                    xformURL,
+		                                    1,
+		                                    argsArray);
+		g_free (argsArray[0]);
+	}
+	return TRUE;
 }
 
 }
